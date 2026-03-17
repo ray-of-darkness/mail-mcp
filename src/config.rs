@@ -211,7 +211,10 @@ fn load_account(
         }
     };
 
-    let auth_method = if has_oauth2 {
+    // Use OAuth2 for IMAP only when no password is provided.
+    // If both password and OAuth2 are configured, password is used for IMAP
+    // and OAuth2 is reserved for Graph API / SMTP XOAUTH2.
+    let auth_method = if has_oauth2 && pass.is_none() {
         AuthMethod::OAuth2
     } else {
         AuthMethod::Password
