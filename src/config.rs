@@ -59,6 +59,8 @@ pub struct ServerConfig {
     pub accounts: BTreeMap<String, AccountConfig>,
     /// OAuth2 configurations keyed by `account_id` (only for accounts using OAuth2)
     pub oauth2_accounts: HashMap<String, OAuth2AccountConfig>,
+    /// Graph API OAuth2 configs keyed by `account_id` (separate from IMAP OAuth2)
+    pub graph_oauth2_accounts: HashMap<String, OAuth2AccountConfig>,
     /// Configured SMTP accounts, keyed by `account_id`
     pub smtp_accounts: HashMap<String, SmtpAccountConfig>,
     /// Whether SMTP send operations are enabled
@@ -133,11 +135,13 @@ impl ServerConfig {
             accounts.insert(account.account_id.clone(), account);
         }
 
+        let graph_oauth2_accounts = load_graph_oauth2_accounts()?;
         let smtp_accounts = load_smtp_accounts(&oauth2_accounts)?;
 
         Ok(Self {
             accounts,
             oauth2_accounts,
+            graph_oauth2_accounts,
             smtp_accounts,
             smtp_write_enabled: parse_bool_env("MAIL_SMTP_WRITE_ENABLED", false)?,
             smtp_save_sent: parse_bool_env("MAIL_SMTP_SAVE_SENT", true)?,
@@ -276,6 +280,55 @@ fn load_oauth2_accounts() -> AppResult<HashMap<String, OAuth2AccountConfig>> {
     }
 
     Ok(oauth2_accounts)
+}
+
+/// Discover and load Graph API OAuth2 configurations from environment.
+///
+/// Scans for `MAIL_GRAPH_*_PROVIDER` variables. These are separate from
+/// `MAIL_OAUTH2_*` to allow different scopes: IMAP OAuth2 uses
+/// `outlook.office.com/IMAP.*` scopes while Graph uses
+/// `graph.microsoft.com/Mail.*` scopes.
+fn load_graph_oauth2_accounts() -> AppResult<HashMap<String, OAuth2AccountConfig>> {
+    let pattern = Regex::new(r"^MAIL_GRAPH_([A-Z0-9_]+)_PROVIDER$")
+        .map_err(|e| AppError::Internal(format!("invalid graph oauth2 regex: {e}")))?;
+
+    let mut segments: Vec<String> = env::vars()
+        .filter_map(|(k, _)| {
+            pattern
+                .captures(&k)
+                .and_then(|c| c.get(1).map(|m| m.as_str().to_owned()))
+        })
+        .collect();
+    segments.sort();
+    segments.dedup();
+
+    let mut accounts = HashMap::new();
+    for seg in segments {
+        let prefix = format!("MAIL_GRAPH_{}_", sanitize_segment(&seg));
+        let account_id = if seg == "DEFAULT" {
+            "default".to_owned()
+        } else {
+            seg.to_ascii_lowercase()
+        };
+
+        let provider_str = required_oauth2_env(&format!("{prefix}PROVIDER"), &account_id)?;
+        let provider = OAuth2Provider::parse(&provider_str)?;
+        let client_id = required_oauth2_env(&format!("{prefix}CLIENT_ID"), &account_id)?;
+        let client_secret = required_oauth2_env(&format!("{prefix}CLIENT_SECRET"), &account_id)?;
+        let refresh_token = required_oauth2_env(&format!("{prefix}REFRESH_TOKEN"), &account_id)?;
+
+        accounts.insert(
+            account_id,
+            OAuth2AccountConfig {
+                provider,
+                client_id,
+                client_secret: SecretString::new(client_secret.into()),
+                refresh_token: SecretString::new(refresh_token.into()),
+            },
+        );
+    }
+
+    Ok(accounts)
 }
 
 /// Discover and load SMTP account configurations from environment.

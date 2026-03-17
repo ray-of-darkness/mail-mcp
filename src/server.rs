@@ -52,8 +52,10 @@ pub struct MailImapServer {
     config: Arc<ServerConfig>,
     /// Cursor store for search pagination (protected by mutex)
     cursors: Arc<Mutex<CursorStore>>,
-    /// OAuth2 token manager (present when any account uses OAuth2)
+    /// OAuth2 token manager for IMAP/SMTP (present when any account uses OAuth2)
     token_manager: Option<Arc<crate::oauth2::TokenManager>>,
+    /// OAuth2 token manager for Graph API (separate scopes from IMAP)
+    graph_token_manager: Option<Arc<crate::oauth2::TokenManager>>,
     /// Tool router for dispatching MCP tool calls
     tool_router: ToolRouter<Self>,
 }
@@ -72,10 +74,18 @@ impl MailImapServer {
                 config.oauth2_accounts.clone(),
             )))
         };
+        let graph_token_manager = if config.graph_oauth2_accounts.is_empty() {
+            None
+        } else {
+            Some(Arc::new(crate::oauth2::TokenManager::new(
+                config.graph_oauth2_accounts.clone(),
+            )))
+        };
         Self {
             config: Arc::new(config),
             cursors: Arc::new(Mutex::new(cursor_store)),
             token_manager,
+            graph_token_manager,
             tool_router: Self::tool_router(),
         }
     }
@@ -2775,14 +2785,22 @@ impl MailImapServer {
             ));
         }
 
-        let tm = self.token_manager.as_ref().ok_or_else(|| {
-            AppError::InvalidInput(format!(
-                "account '{}' requires OAuth2 for Graph API but no OAuth2 is configured. \
-                 Set MAIL_OAUTH2_{}_PROVIDER=microsoft with Mail.Send scope.",
-                input.account_id,
-                input.account_id.to_ascii_uppercase()
-            ))
-        })?;
+        // Prefer Graph-specific token manager (MAIL_GRAPH_*), fall back to
+        // general OAuth2 (MAIL_OAUTH2_*) for backward compatibility
+        let tm = self
+            .graph_token_manager
+            .as_ref()
+            .filter(|tm| tm.has_oauth2(&input.account_id))
+            .or_else(|| self.token_manager.as_ref().filter(|tm| tm.has_oauth2(&input.account_id)))
+            .ok_or_else(|| {
+                AppError::InvalidInput(format!(
+                    "account '{}' requires OAuth2 for Graph API. \
+                     Set MAIL_GRAPH_{}_PROVIDER=microsoft (or MAIL_OAUTH2_{}_PROVIDER) with Mail.Send scope.",
+                    input.account_id,
+                    input.account_id.to_ascii_uppercase(),
+                    input.account_id.to_ascii_uppercase()
+                ))
+            })?;
 
         let params = graph::GraphEmailParams {
             to: input.to.clone(),
