@@ -144,7 +144,7 @@ impl ServerConfig {
             graph_oauth2_accounts,
             smtp_accounts,
             smtp_write_enabled: parse_bool_env("MAIL_SMTP_WRITE_ENABLED", false)?,
-            smtp_save_sent: parse_bool_env("MAIL_SMTP_SAVE_SENT", true)?,
+            smtp_save_sent: parse_bool_env("MAIL_SMTP_SAVE_SENT", false)?,
             smtp_timeout_ms: parse_u64_env("MAIL_SMTP_TIMEOUT_MS", 30_000)?,
             write_enabled: parse_bool_env("MAIL_IMAP_WRITE_ENABLED", false)?,
             connect_timeout_ms: parse_u64_env("MAIL_IMAP_CONNECT_TIMEOUT_MS", 30_000)?,
