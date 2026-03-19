@@ -27,7 +27,7 @@ use crate::models::{
     MailboxStatusInput, MessageDetail, MessageSummary, Meta, MoveMessageInput, RenameMailboxInput,
     SearchAndDeleteInput, SearchAndMoveInput, SearchMessagesInput, SmtpAccountInfo,
     SmtpForwardMessageInput, SmtpReplyMessageInput, SmtpSendMessageInput, SmtpVerifyAccountInput,
-    GraphSendMessageInput, ToolEnvelope, UpdateMessageFlagsInput,
+    AttachmentInput, GraphSendMessageInput, ToolEnvelope, UpdateMessageFlagsInput,
 };
 use crate::pagination::{CursorEntry, CursorStore};
 use crate::graph;
@@ -2488,6 +2488,7 @@ impl MailImapServer {
         }
 
         let smtp_config = self.config.get_smtp_account(&input.account_id)?;
+        let attachments = decode_attachments(&input.attachments)?;
 
         let composition = smtp::EmailComposition {
             from: smtp_config.user.clone(),
@@ -2500,6 +2501,7 @@ impl MailImapServer {
             reply_to: input.reply_to,
             in_reply_to: input.in_reply_to,
             references: input.references,
+            attachments,
         };
 
         let message_id = smtp::send_email(
@@ -2632,6 +2634,7 @@ impl MailImapServer {
             reply_to: None,
             in_reply_to: Some(original_message_id),
             references: Some(references),
+            attachments: vec![],
         };
 
         let sent_message_id = smtp::send_email(
@@ -2736,6 +2739,7 @@ impl MailImapServer {
             reply_to: None,
             in_reply_to: None,
             references: None,
+            attachments: vec![],
         };
 
         let sent_message_id = smtp::send_email(
@@ -2846,6 +2850,15 @@ impl MailImapServer {
             in_reply_to: input.in_reply_to,
             references: input.references,
             save_to_sent: input.save_to_sent,
+            attachments: input
+                .attachments
+                .into_iter()
+                .map(|a| graph::GraphEmailAttachment {
+                    filename: a.filename,
+                    content_type: a.content_type,
+                    content_base64: a.content_base64,
+                })
+                .collect(),
         };
 
         graph::send_email(tm, &input.account_id, &params).await?;
@@ -3549,6 +3562,29 @@ fn require_write_enabled(config: &ServerConfig) -> AppResult<()> {
 }
 
 /// Guard: SMTP write operations require explicit opt-in
+/// Decode base64 attachment inputs into raw bytes for SMTP
+fn decode_attachments(inputs: &[AttachmentInput]) -> AppResult<Vec<smtp::EmailAttachment>> {
+    use base64::Engine;
+    inputs
+        .iter()
+        .map(|a| {
+            let content = base64::engine::general_purpose::STANDARD
+                .decode(&a.content_base64)
+                .map_err(|e| {
+                    AppError::InvalidInput(format!(
+                        "invalid base64 in attachment '{}': {e}",
+                        a.filename
+                    ))
+                })?;
+            Ok(smtp::EmailAttachment {
+                filename: a.filename.clone(),
+                content_type: a.content_type.clone(),
+                content,
+            })
+        })
+        .collect()
+}
+
 fn require_smtp_write_enabled(config: &ServerConfig) -> AppResult<()> {
     if !config.smtp_write_enabled {
         return Err(AppError::InvalidInput(

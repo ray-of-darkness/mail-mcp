@@ -530,6 +530,19 @@ pub struct AppendMessageInput {
     pub raw_message: String,
 }
 
+// ─── Attachment model ────────────────────────────────────────────────────────
+
+/// Email attachment (base64-encoded content)
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct AttachmentInput {
+    /// Filename (e.g., "report.pdf")
+    pub filename: String,
+    /// MIME type (e.g., "application/pdf", "image/png")
+    pub content_type: String,
+    /// Base64-encoded file content
+    pub content_base64: String,
+}
+
 // ─── SMTP input models ───────────────────────────────────────────────────────
 
 /// Input: send a new email via SMTP
@@ -558,6 +571,9 @@ pub struct SmtpSendMessageInput {
     pub in_reply_to: Option<String>,
     /// References header for threading (optional)
     pub references: Option<String>,
+    /// File attachments (optional, base64-encoded)
+    #[serde(default)]
+    pub attachments: Vec<AttachmentInput>,
 }
 
 /// Input: reply to an existing message via SMTP
@@ -652,6 +668,9 @@ pub struct GraphSendMessageInput {
     /// Save to Sent Items folder (default: true)
     #[serde(default = "default_true")]
     pub save_to_sent: bool,
+    /// File attachments (optional, base64-encoded)
+    #[serde(default)]
+    pub attachments: Vec<AttachmentInput>,
 }
 
 /// Mailbox status information

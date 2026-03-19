@@ -48,6 +48,8 @@ struct GraphMessage {
     in_reply_to: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     internet_message_headers: Option<Vec<GraphHeader>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    attachments: Vec<GraphAttachment>,
 }
 
 #[derive(Debug, Serialize)]
@@ -74,6 +76,16 @@ struct GraphHeader {
     value: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphAttachment {
+    #[serde(rename = "@odata.type")]
+    odata_type: &'static str,
+    name: String,
+    content_type: String,
+    content_bytes: String,
+}
+
 // ─── Helper constructors ─────────────────────────────────────────────────────
 
 fn recipient(addr: &str) -> GraphRecipient {
@@ -91,6 +103,14 @@ fn recipients(addrs: &[String]) -> Vec<GraphRecipient> {
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 /// Parameters for sending an email via Microsoft Graph
+/// An attachment for Graph API
+pub struct GraphEmailAttachment {
+    pub filename: String,
+    pub content_type: String,
+    pub content_base64: String,
+}
+
+/// Parameters for sending an email via Microsoft Graph
 pub struct GraphEmailParams {
     pub to: Vec<String>,
     pub cc: Vec<String>,
@@ -101,6 +121,7 @@ pub struct GraphEmailParams {
     pub reply_to: Option<String>,
     pub in_reply_to: Option<String>,
     pub references: Option<String>,
+    pub attachments: Vec<GraphEmailAttachment>,
     pub save_to_sent: bool,
 }
 
@@ -154,6 +175,16 @@ pub async fn send_email(
         } else {
             Some(headers)
         },
+        attachments: params
+            .attachments
+            .iter()
+            .map(|a| GraphAttachment {
+                odata_type: "#microsoft.graph.fileAttachment",
+                name: a.filename.clone(),
+                content_type: a.content_type.clone(),
+                content_bytes: a.content_base64.clone(),
+            })
+            .collect(),
     };
 
     let request_body = SendMailRequest {
@@ -225,6 +256,7 @@ mod tests {
                 reply_to: None,
                 in_reply_to: None,
                 internet_message_headers: None,
+                attachments: vec![],
             },
             save_to_sent_items: true,
         };

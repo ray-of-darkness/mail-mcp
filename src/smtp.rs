@@ -75,6 +75,13 @@ pub struct SmtpAccountConfig {
 
 // ─── Email composition ───────────────────────────────────────────────────────
 
+/// A file attachment for an email
+pub struct EmailAttachment {
+    pub filename: String,
+    pub content_type: String,
+    pub content: Vec<u8>,
+}
+
 /// Parameters for composing and sending an email
 pub struct EmailComposition {
     pub from: String,
@@ -87,6 +94,7 @@ pub struct EmailComposition {
     pub reply_to: Option<String>,
     pub in_reply_to: Option<String>,
     pub references: Option<String>,
+    pub attachments: Vec<EmailAttachment>,
 }
 
 // ─── Send email ──────────────────────────────────────────────────────────────
@@ -214,36 +222,56 @@ fn build_message(comp: &EmailComposition) -> AppResult<Message> {
         builder = builder.references(references.clone());
     }
 
-    // Build body: multipart if both text and HTML, single part otherwise
-    let message = match (&comp.body_text, &comp.body_html) {
-        (Some(text), Some(html)) => builder
-            .multipart(
-                MultiPart::alternative()
-                    .singlepart(
-                        SinglePart::builder()
-                            .content_type(ContentType::TEXT_PLAIN)
-                            .body(text.clone()),
-                    )
-                    .singlepart(
-                        SinglePart::builder()
-                            .content_type(ContentType::TEXT_HTML)
-                            .body(html.clone()),
-                    ),
+    // Build body part
+    let body_part = match (&comp.body_text, &comp.body_html) {
+        (Some(text), Some(html)) => MultiPart::alternative()
+            .singlepart(
+                SinglePart::builder()
+                    .content_type(ContentType::TEXT_PLAIN)
+                    .body(text.clone()),
             )
-            .map_err(|e| AppError::Internal(format!("failed to build multipart message: {e}")))?,
-        (Some(text), None) => builder
-            .body(text.clone())
-            .map_err(|e| AppError::Internal(format!("failed to build text message: {e}")))?,
-        (None, Some(html)) => builder
             .singlepart(
                 SinglePart::builder()
                     .content_type(ContentType::TEXT_HTML)
                     .body(html.clone()),
-            )
-            .map_err(|e| AppError::Internal(format!("failed to build HTML message: {e}")))?,
-        (None, None) => builder
-            .body(String::new())
-            .map_err(|e| AppError::Internal(format!("failed to build empty message: {e}")))?,
+            ),
+        (Some(text), None) => MultiPart::alternative().singlepart(
+            SinglePart::builder()
+                .content_type(ContentType::TEXT_PLAIN)
+                .body(text.clone()),
+        ),
+        (None, Some(html)) => MultiPart::alternative().singlepart(
+            SinglePart::builder()
+                .content_type(ContentType::TEXT_HTML)
+                .body(html.clone()),
+        ),
+        (None, None) => MultiPart::alternative().singlepart(
+            SinglePart::builder()
+                .content_type(ContentType::TEXT_PLAIN)
+                .body(String::new()),
+        ),
+    };
+
+    // If attachments, wrap in multipart/mixed; otherwise just use body
+    let message = if comp.attachments.is_empty() {
+        builder
+            .multipart(body_part)
+            .map_err(|e| AppError::Internal(format!("failed to build message: {e}")))?
+    } else {
+        let mut mixed = MultiPart::mixed().multipart(body_part);
+        for att in &comp.attachments {
+            let ct: ContentType = att
+                .content_type
+                .parse()
+                .unwrap_or(ContentType::parse("application/octet-stream").unwrap());
+            mixed = mixed.singlepart(
+                lettre::message::Attachment::new(att.filename.clone())
+                    .body(att.content.clone(), ct),
+            );
+        }
+        builder
+            .multipart(mixed)
+            .map_err(|e| AppError::Internal(format!("failed to build message with attachments: {e}")))?
     };
 
     Ok(message)
@@ -333,6 +361,7 @@ mod tests {
             reply_to: None,
             in_reply_to: None,
             references: None,
+            attachments: vec![],
         };
         let msg = build_message(&comp).unwrap();
         let binding = msg.formatted();
@@ -354,6 +383,7 @@ mod tests {
             reply_to: None,
             in_reply_to: None,
             references: None,
+            attachments: vec![],
         };
         let msg = build_message(&comp).unwrap();
         let binding = msg.formatted();
@@ -376,6 +406,7 @@ mod tests {
             reply_to: None,
             in_reply_to: Some("<original@example.com>".to_owned()),
             references: Some("<original@example.com>".to_owned()),
+            attachments: vec![],
         };
         let msg = build_message(&comp).unwrap();
         let binding = msg.formatted();
@@ -397,6 +428,7 @@ mod tests {
             reply_to: None,
             in_reply_to: None,
             references: None,
+            attachments: vec![],
         };
         assert!(build_message(&comp).is_err());
     }
@@ -417,6 +449,7 @@ mod tests {
             reply_to: None,
             in_reply_to: None,
             references: None,
+            attachments: vec![],
         };
         let msg = build_message(&comp).unwrap();
         let binding = msg.formatted();
