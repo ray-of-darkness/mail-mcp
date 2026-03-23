@@ -61,6 +61,10 @@ pub struct ServerConfig {
     pub oauth2_accounts: HashMap<String, OAuth2AccountConfig>,
     /// Graph API OAuth2 configs keyed by `account_id` (separate from IMAP OAuth2)
     pub graph_oauth2_accounts: HashMap<String, OAuth2AccountConfig>,
+    /// EWS account configs keyed by `account_id`
+    pub ews_accounts: HashMap<String, crate::ews::EwsAccountConfig>,
+    /// EWS OAuth2 configs keyed by `account_id`
+    pub ews_oauth2_accounts: HashMap<String, OAuth2AccountConfig>,
     /// Configured SMTP accounts, keyed by `account_id`
     pub smtp_accounts: HashMap<String, SmtpAccountConfig>,
     /// Whether SMTP send operations are enabled
@@ -136,12 +140,15 @@ impl ServerConfig {
         }
 
         let graph_oauth2_accounts = load_graph_oauth2_accounts()?;
+        let (ews_accounts, ews_oauth2_accounts) = load_ews_accounts()?;
         let smtp_accounts = load_smtp_accounts(&oauth2_accounts)?;
 
         Ok(Self {
             accounts,
             oauth2_accounts,
             graph_oauth2_accounts,
+            ews_accounts,
+            ews_oauth2_accounts,
             smtp_accounts,
             smtp_write_enabled: parse_bool_env("MAIL_SMTP_WRITE_ENABLED", false)?,
             smtp_save_sent: parse_bool_env("MAIL_SMTP_SAVE_SENT", false)?,
@@ -329,6 +336,79 @@ fn load_graph_oauth2_accounts() -> AppResult<HashMap<String, OAuth2AccountConfig
     }
 
     Ok(accounts)
+}
+
+/// Discover and load EWS account configurations from environment.
+///
+/// Scans for `MAIL_EWS_*_USER` variables. For each found, loads
+/// OAuth2 credentials from `MAIL_EWS_*_CLIENT_ID`, etc.
+fn load_ews_accounts() -> AppResult<(
+    HashMap<String, crate::ews::EwsAccountConfig>,
+    HashMap<String, OAuth2AccountConfig>,
+)> {
+    let pattern = Regex::new(r"^MAIL_EWS_([A-Z0-9_]+)_USER$")
+        .map_err(|e| AppError::Internal(format!("invalid ews regex: {e}")))?;
+
+    let mut segments: Vec<String> = env::vars()
+        .filter_map(|(k, _)| {
+            pattern
+                .captures(&k)
+                .and_then(|c| c.get(1).map(|m| m.as_str().to_owned()))
+        })
+        .collect();
+    segments.sort();
+    segments.dedup();
+
+    let mut ews_accounts = HashMap::new();
+    let mut ews_oauth2 = HashMap::new();
+
+    for seg in segments {
+        let prefix = format!("MAIL_EWS_{}_", sanitize_segment(&seg));
+        let account_id = if seg == "DEFAULT" {
+            "default".to_owned()
+        } else {
+            seg.to_ascii_lowercase()
+        };
+
+        let user = match env::var(format!("{prefix}USER")) {
+            Ok(v) if !v.trim().is_empty() => v,
+            _ => continue,
+        };
+
+        ews_accounts.insert(
+            account_id.clone(),
+            crate::ews::EwsAccountConfig {
+                account_id: account_id.clone(),
+                user,
+            },
+        );
+
+        // Load OAuth2 for EWS
+        let client_id = match env::var(format!("{prefix}CLIENT_ID")) {
+            Ok(v) if !v.trim().is_empty() => v,
+            _ => "d3590ed6-52b3-4102-aeff-aad2292ab01c".to_owned(), // Default: Microsoft Office
+        };
+        let client_secret = match env::var(format!("{prefix}CLIENT_SECRET")) {
+            Ok(v) if !v.trim().is_empty() => v,
+            _ => "none".to_owned(),
+        };
+        let refresh_token = match env::var(format!("{prefix}REFRESH_TOKEN")) {
+            Ok(v) if !v.trim().is_empty() => v,
+            _ => continue,
+        };
+
+        ews_oauth2.insert(
+            account_id,
+            OAuth2AccountConfig {
+                provider: OAuth2Provider::Microsoft,
+                client_id,
+                client_secret: SecretString::new(client_secret.into()),
+                refresh_token: SecretString::new(refresh_token.into()),
+            },
+        );
+    }
+
+    Ok((ews_accounts, ews_oauth2))
 }
 
 /// Discover and load SMTP account configurations from environment.

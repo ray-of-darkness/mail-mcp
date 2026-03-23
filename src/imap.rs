@@ -749,6 +749,8 @@ mod tests {
             accounts,
             oauth2_accounts: std::collections::HashMap::new(),
             graph_oauth2_accounts: std::collections::HashMap::new(),
+            ews_accounts: std::collections::HashMap::new(),
+            ews_oauth2_accounts: std::collections::HashMap::new(),
             smtp_accounts: std::collections::HashMap::new(),
             smtp_write_enabled: false,
             smtp_save_sent: false,

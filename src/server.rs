@@ -56,6 +56,8 @@ pub struct MailImapServer {
     token_manager: Option<Arc<crate::oauth2::TokenManager>>,
     /// OAuth2 token manager for Graph API (separate scopes from IMAP)
     graph_token_manager: Option<Arc<crate::oauth2::TokenManager>>,
+    /// OAuth2 token manager for EWS
+    ews_token_manager: Option<Arc<crate::oauth2::TokenManager>>,
     /// Update notice if a newer version is available
     update_notice: Option<String>,
     /// Tool router for dispatching MCP tool calls
@@ -83,11 +85,19 @@ impl MailImapServer {
                 config.graph_oauth2_accounts.clone(),
             )))
         };
+        let ews_token_manager = if config.ews_oauth2_accounts.is_empty() {
+            None
+        } else {
+            Some(Arc::new(crate::oauth2::TokenManager::new(
+                config.ews_oauth2_accounts.clone(),
+            )))
+        };
         Self {
             config: Arc::new(config),
             cursors: Arc::new(Mutex::new(cursor_store)),
             token_manager,
             graph_token_manager,
+            ews_token_manager,
             update_notice,
             tool_router: Self::tool_router(),
         }
@@ -627,6 +637,102 @@ impl MailImapServer {
         let started = Instant::now();
         let result = self.graph_send_message_impl(input).await;
         finalize_tool(started, "graph_send_message", result)
+    }
+
+    // ─── EWS Tools ────────────────────────────────────────────────────────────
+
+    /// Tool: Search emails via EWS (Exchange Web Services)
+    #[tool(
+        name = "ews_search_messages",
+        description = "Search emails via Exchange Web Services. Preferred for Microsoft accounts. Supports inbox, sent, drafts, deleted, junk folders."
+    )]
+    async fn ews_search_messages(
+        &self,
+        Parameters(input): Parameters<crate::models::EwsSearchInput>,
+    ) -> Result<Json<ToolEnvelope<serde_json::Value>>, ErrorData> {
+        let started = Instant::now();
+        let result = async {
+            let tm = self.ews_token_manager.as_ref().ok_or_else(|| {
+                AppError::InvalidInput(format!(
+                    "No EWS configuration for account '{}'. Set MAIL_EWS_{}_USER and MAIL_EWS_{}_REFRESH_TOKEN.",
+                    input.account_id, input.account_id.to_ascii_uppercase(), input.account_id.to_ascii_uppercase()
+                ))
+            })?;
+            let folder = input.folder.as_deref().unwrap_or("inbox");
+            let limit = input.limit.unwrap_or(10).min(50);
+            let offset = input.offset.unwrap_or(0);
+            let messages = crate::ews::find_items(tm, &input.account_id, folder, limit, offset).await?;
+            let data = serde_json::json!({
+                "account_id": input.account_id,
+                "folder": folder,
+                "returned": messages.len(),
+                "offset": offset,
+                "messages": messages,
+            });
+            Ok((format!("{} message(s) via EWS", messages.len()), data))
+        }
+        .await;
+        finalize_tool(started, "ews_search_messages", result)
+    }
+
+    /// Tool: Get email details via EWS
+    #[tool(
+        name = "ews_get_message",
+        description = "Get full email content via Exchange Web Services using an EWS item ID."
+    )]
+    async fn ews_get_message(
+        &self,
+        Parameters(input): Parameters<crate::models::EwsGetMessageInput>,
+    ) -> Result<Json<ToolEnvelope<serde_json::Value>>, ErrorData> {
+        let started = Instant::now();
+        let result = async {
+            let tm = self.ews_token_manager.as_ref().ok_or_else(|| {
+                AppError::InvalidInput("No EWS configuration".to_owned())
+            })?;
+            let detail = crate::ews::get_item(tm, &input.account_id, &input.item_id).await?;
+            let data = serde_json::to_value(&detail)
+                .map_err(|e| AppError::Internal(format!("serialize: {e}")))?;
+            Ok(("Message retrieved via EWS".to_owned(), data))
+        }
+        .await;
+        finalize_tool(started, "ews_get_message", result)
+    }
+
+    /// Tool: Send email via EWS
+    #[tool(
+        name = "ews_send_message",
+        description = "Send email via Exchange Web Services. Works on Microsoft tenants that block SMTP and Graph API."
+    )]
+    async fn ews_send_message(
+        &self,
+        Parameters(input): Parameters<crate::models::EwsSendMessageInput>,
+    ) -> Result<Json<ToolEnvelope<serde_json::Value>>, ErrorData> {
+        let started = Instant::now();
+        let result = async {
+            require_smtp_write_enabled(&self.config)?;
+            let tm = self.ews_token_manager.as_ref().ok_or_else(|| {
+                AppError::InvalidInput("No EWS configuration".to_owned())
+            })?;
+
+            let (body, body_type) = match (&input.body_html, &input.body_text) {
+                (Some(html), _) => (html.as_str(), "HTML"),
+                (None, Some(text)) => (text.as_str(), "Text"),
+                (None, None) => ("", "Text"),
+            };
+
+            crate::ews::send_email(tm, &input.account_id, &input.to, &input.cc, &input.subject, body, body_type).await?;
+
+            let recipients = input.to.len() + input.cc.len();
+            let data = serde_json::json!({
+                "status": "ok",
+                "account_id": input.account_id,
+                "recipients_count": recipients,
+                "method": "ews",
+            });
+            Ok((format!("Email sent via EWS to {recipients} recipient(s)"), data))
+        }
+        .await;
+        finalize_tool(started, "ews_send_message", result)
     }
 
     // ─── Setup Guide Tool ────────────────────────────────────────────────────

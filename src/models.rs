@@ -679,6 +679,51 @@ pub struct GraphSendMessageInput {
     pub attachments: Vec<AttachmentInput>,
 }
 
+// ─── EWS input models ────────────────────────────────────────────────────────
+
+/// Input: search messages via EWS
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct EwsSearchInput {
+    /// Account identifier (defaults to `"default"`)
+    #[serde(default = "default_account_id")]
+    pub account_id: String,
+    /// Folder name (inbox, sent, drafts, deleted, junk)
+    pub folder: Option<String>,
+    /// Maximum messages to return (1..50, default 10)
+    pub limit: Option<usize>,
+    /// Offset for pagination (default 0)
+    pub offset: Option<usize>,
+}
+
+/// Input: get message details via EWS
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct EwsGetMessageInput {
+    /// Account identifier (defaults to `"default"`)
+    #[serde(default = "default_account_id")]
+    pub account_id: String,
+    /// EWS Item ID
+    pub item_id: String,
+}
+
+/// Input: send email via EWS
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct EwsSendMessageInput {
+    /// Account identifier (defaults to `"default"`)
+    #[serde(default = "default_account_id")]
+    pub account_id: String,
+    /// Recipient email addresses
+    pub to: Vec<String>,
+    /// CC recipients (optional)
+    #[serde(default)]
+    pub cc: Vec<String>,
+    /// Email subject
+    pub subject: String,
+    /// Plain text body
+    pub body_text: Option<String>,
+    /// HTML body
+    pub body_html: Option<String>,
+}
+
 /// Mailbox status information
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MailboxStatusInfo {

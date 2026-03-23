@@ -18,6 +18,7 @@
 
 mod config;
 mod errors;
+mod ews;
 mod graph;
 mod imap;
 mod message_id;
