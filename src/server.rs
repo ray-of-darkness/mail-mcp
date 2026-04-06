@@ -1941,6 +1941,7 @@ impl MailImapServer {
                 &self.config,
                 &mut destination_session,
                 input.destination_mailbox.as_str(),
+                None,
                 raw.as_slice(),
             )
             .await
@@ -2756,6 +2757,7 @@ impl MailImapServer {
             &self.config,
             &mut session,
             &input.mailbox,
+            None,
             input.raw_message.as_bytes(),
         )
         .await?;
@@ -3217,7 +3219,7 @@ impl MailImapServer {
             .find(|name| is_sent_folder_name(name))
             .unwrap_or_else(|| "Sent".to_owned());
 
-        imap::append(&self.config, &mut session, &sent_folder, rfc822).await?;
+        imap::append(&self.config, &mut session, &sent_folder, Some("\\Seen"), rfc822).await?;
         Ok(())
     }
 }
