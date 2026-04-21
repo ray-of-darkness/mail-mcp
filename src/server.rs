@@ -753,6 +753,17 @@ impl MailImapServer {
         let started = Instant::now();
         let result = async {
             require_smtp_write_enabled(&self.config)?;
+            validate_account_id(&input.account_id)?;
+            validate_email_recipients(&input.to, "to")?;
+            if !input.cc.is_empty() {
+                validate_email_recipients(&input.cc, "cc")?;
+            }
+            if !input.bcc.is_empty() {
+                validate_email_recipients(&input.bcc, "bcc")?;
+            }
+            if input.subject.is_empty() || input.subject.len() > 998 {
+                return Err(AppError::invalid("subject must be 1..998 characters"));
+            }
             let tm = self.ews_token_manager.as_ref().ok_or_else(|| {
                 AppError::InvalidInput("No EWS configuration".to_owned())
             })?;
@@ -763,9 +774,19 @@ impl MailImapServer {
                 (None, None) => ("", "Text"),
             };
 
-            crate::ews::send_email(tm, &input.account_id, &input.to, &input.cc, &input.subject, body, body_type).await?;
+            let params = crate::ews::EwsSendParams {
+                to: &input.to,
+                cc: &input.cc,
+                bcc: &input.bcc,
+                subject: &input.subject,
+                body,
+                body_type,
+                in_reply_to: input.in_reply_to.as_deref(),
+                references: input.references.as_deref(),
+            };
+            crate::ews::send_email(tm, &input.account_id, &params).await?;
 
-            let recipients = input.to.len() + input.cc.len();
+            let recipients = input.to.len() + input.cc.len() + input.bcc.len();
             let data = serde_json::json!({
                 "status": "ok",
                 "account_id": input.account_id,

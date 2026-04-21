@@ -19,6 +19,7 @@
 //! No additional configuration needed beyond OAuth2.
 
 use serde::{Deserialize, Serialize};
+use tracing::{debug, warn};
 
 use crate::errors::{AppError, AppResult};
 use crate::oauth2::TokenManager;
@@ -212,7 +213,14 @@ pub async fn send_email(
         {
             return send_via_reply(&client, &access_token, &graph_msg_id, params).await;
         }
-        // Message not found in this mailbox — fall through to regular sendMail
+        // Message not found in this mailbox — threading will be lost. This
+        // is expected when replying to a conversation whose original message
+        // was deleted or lives in a different mailbox; log at DEBUG so it's
+        // visible in troubleshooting without spamming normal operation.
+        debug!(
+            in_reply_to = %irt,
+            "Graph: original message not found; sending without thread reply"
+        );
     }
 
     send_via_sendmail(&client, &access_token, params).await
@@ -294,7 +302,20 @@ async fn find_message_by_internet_id(
         .map_err(|e| AppError::Internal(format!("Graph search request failed: {e}")))?;
 
     if !response.status().is_success() {
-        // Search failed — don't error, just return None so we fall back to sendMail
+        // Search failed (permissions, rate limit, 5xx…) — we don't propagate
+        // the error so the caller can still send (without threading), but we
+        // WARN so operators see that threading degraded due to a real error.
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "<failed to read body>".to_owned());
+        warn!(
+            status = %status,
+            body = %body,
+            internet_message_id = %clean_id,
+            "Graph: message lookup for threading failed; falling back to sendMail without thread"
+        );
         return Ok(None);
     }
 

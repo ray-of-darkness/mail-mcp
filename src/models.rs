@@ -723,17 +723,24 @@ pub struct EwsSendMessageInput {
     /// Account identifier (defaults to `"default"`)
     #[serde(default = "default_account_id")]
     pub account_id: String,
-    /// Recipient email addresses
+    /// Recipient email addresses (1..50)
     pub to: Vec<String>,
-    /// CC recipients (optional)
+    /// CC recipients (optional, max 50)
     #[serde(default)]
     pub cc: Vec<String>,
+    /// BCC recipients (optional, max 50)
+    #[serde(default)]
+    pub bcc: Vec<String>,
     /// Email subject
     pub subject: String,
     /// Plain text body
     pub body_text: Option<String>,
     /// HTML body
     pub body_html: Option<String>,
+    /// In-Reply-To message ID for threading (optional)
+    pub in_reply_to: Option<String>,
+    /// References header for threading (optional)
+    pub references: Option<String>,
 }
 
 /// Mailbox status information
